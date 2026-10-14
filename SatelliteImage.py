@@ -14,8 +14,9 @@ class ImageStatus(IntEnum):
     """Current lifecycle state of a simulated image."""
 
     STORED = 0
-    FULLY_DELIVERED = 1
-    DELETED = 2
+    TRANSMITTING = 1
+    FULLY_DELIVERED = 2
+    DELETED = 3
 
 
 @dataclass(slots=True)
@@ -103,6 +104,4 @@ class SatelliteImage:
             return self.compressed_size
         return self.original_size
 
-
-# Partial or resumable transmissions are intentionally unsupported for now.
-# A selected representation must fit completely within the remaining contact.
+# to do add different compression algorithms?

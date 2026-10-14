@@ -22,9 +22,10 @@ class MissionState:
 
     config: SimulationConfig
     current_time: float = 0.0
+    #consider implementing a dictionary instead of list as many ops will be O(n) 
     onboard_images: list[SatelliteImage] = field(default_factory=list)
-    in_contact: bool = False
     remaining_downlink_mb: float = 0.0
+    # in case for investigating action decisions
     action_history: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -33,10 +34,6 @@ class MissionState:
             raise ValueError("current_time cannot be negative")
         if self.remaining_downlink_mb < 0:
             raise ValueError("remaining_downlink_mb cannot be negative")
-        if not self.in_contact and self.remaining_downlink_mb > 0:
-            raise ValueError(
-                "remaining_downlink_mb must be 0 when not in contact"
-            )
 
     @property
     def used_storage_mb(self) -> float:

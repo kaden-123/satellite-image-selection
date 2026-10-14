@@ -1,8 +1,4 @@
 from dataclasses import dataclass
-from enum import IntEnum
-
-class 
-
 
 @dataclass(slots=True)
 class SimulationConfig:

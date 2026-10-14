@@ -26,14 +26,18 @@ class MetricsRecorder:
         self,
         policy_name: str,
         random_seed: int,
+        available_downlink_mb_per_contact: float,
         initial_capacity: int = 4096,
     ) -> None:
         """Initialize counters, compact record storage, and runtime timing."""
+        if available_downlink_mb_per_contact < 0:
+            raise ValueError("available_downlink_mb_per_contact cannot be negative")
         if initial_capacity <= 0:
             raise ValueError("initial_capacity must be greater than 0")
 
         self.policy_name = policy_name
         self.random_seed = random_seed
+        self.available_downlink_mb_per_contact = available_downlink_mb_per_contact
 
         self._final_image_records = np.empty(
             initial_capacity,
@@ -46,27 +50,15 @@ class MetricsRecorder:
         self.runtime_seconds = 0.0
 
         self.total_images_captured = 0
-        self.storage_overflows = 0
-        self.total_available_downlink_mb = 0.0
-        self.total_transmitted_mb = 0.0
+        self.total_contacts = 0
 
     def record_capture(self) -> None:
         """Increment the number of images captured during this run."""
         self.total_images_captured += 1
 
-    def record_storage_overflow(self) -> None:
-        """Increment the number of storage-overflow events."""
-        self.storage_overflows += 1
-
-    def record_contact(self, available_mb: float, transmitted_mb: float) -> None:
-        """Record available and used capacity for one ground contact."""
-        if available_mb < 0 or transmitted_mb < 0:
-            raise ValueError("downlink amounts cannot be negative")
-        if transmitted_mb > available_mb + 1e-9:
-            raise ValueError("transmitted_mb cannot exceed available_mb")
-
-        self.total_available_downlink_mb += available_mb
-        self.total_transmitted_mb += transmitted_mb
+    def record_contact(self) -> None:
+        """Increment the number of ground contacts during this run."""
+        self.total_contacts += 1
 
     def record_final_image(
         self,
@@ -116,7 +108,7 @@ class MetricsRecorder:
             raise ValueError("oracle_delivered_value cannot be negative")
 
         records = self.final_image_records
-        delivered = records["delivered_value"] > 0
+        delivered = records["final_status"] == int(ImageStatus.FULLY_DELIVERED)
         deleted = records["final_status"] == int(ImageStatus.DELETED)
         delays = records["downlink_time"] - records["capture_time"]
         valid_delays = delays[~np.isnan(delays)]
@@ -124,6 +116,10 @@ class MetricsRecorder:
         total_available_value = float(records["true_value"].sum())
         total_delivered_value = float(records["delivered_value"].sum())
         total_value_loss = total_available_value - total_delivered_value
+        total_transmitted_mb = float(records["mb_transmitted"].sum())
+        total_available_downlink_mb = (
+            self.total_contacts * self.available_downlink_mb_per_contact
+        )
 
         normalized_delivered_value = (
             total_delivered_value / total_available_value
@@ -131,13 +127,13 @@ class MetricsRecorder:
             else 0.0
         )
         bandwidth_utilization = (
-            self.total_transmitted_mb / self.total_available_downlink_mb
-            if self.total_available_downlink_mb > 0
+            total_transmitted_mb / total_available_downlink_mb
+            if total_available_downlink_mb > 0
             else 0.0
         )
         value_per_mb = (
-            total_delivered_value / self.total_transmitted_mb
-            if self.total_transmitted_mb > 0
+            total_delivered_value / total_transmitted_mb
+            if total_transmitted_mb > 0
             else 0.0
         )
 
@@ -166,8 +162,9 @@ class MetricsRecorder:
             "oracle_delivered_value": oracle_value,
             "oracle_regret": oracle_regret,
             "normalized_oracle_regret": normalized_oracle_regret,
-            "total_transmitted_mb": self.total_transmitted_mb,
-            "storage_overflows": self.storage_overflows,
+            "total_contacts": self.total_contacts,
+            "total_available_downlink_mb": total_available_downlink_mb,
+            "total_transmitted_mb": total_transmitted_mb,
             "average_downlink_delay_days": (
                 float(valid_delays.mean()) if valid_delays.size else np.nan
             ),
