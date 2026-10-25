@@ -1,3 +1,5 @@
+import xgboost as xgb
+import numpy as np
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import IntEnum
@@ -69,6 +71,59 @@ class Policy(ABC):
         raise NotImplementedError
 
 
+class XGBPolicy(Policy):
+    "Uses trained XGB ranker to select images to transmit while using FIFO policy on storage pressure"
+
+    name: ClassVar[str] = "xgb"
+
+    def __init__(self):
+        self.ranker = xgb.XGBRanker()
+        self.ranker.load_model("XGBRanker.json")
+
+    def on_image_capture(self, image: SatelliteImage, state: MissionState) -> Action:
+        """Prefer to store every newly captured image at full resolution."""
+        return FIFOPolicy().on_image_capture(image, state)
+
+    def on_storage_pressure(self, image: SatelliteImage, state: MissionState) -> StoragePlan:
+        """Plan deletion of the oldest images until the incoming image can fit."""
+        return FIFOPolicy().on_storage_pressure(image, state)
+
+    def on_contact_available(self,
+                             contact_end_time: float,
+                             state: MissionState, 
+                             config :SimulationConfig) -> tuple[SatelliteImage | None, Action, float | None]:
+
+        remaining_seconds = (
+                contact_end_time - state.current_time
+            ) * SECONDS_PER_DAY
+
+        remaining_days = remaining_seconds / SECONDS_PER_DAY
+        
+        candidates = []
+        features = []
+        for image in state.onboard_images:
+            if image.status != ImageStatus.STORED:
+                continue
+            for rep in ImageRepresentation:
+                if rep > image.representation:
+                    continue
+                size_mb = image.representation_sizes[rep]
+                transmission_seconds = size_mb * 8 / config.bandwidth
+                if transmission_seconds <= remaining_seconds:
+                    candidates.append((image, rep, transmission_seconds))
+                    features.append((remaining_seconds / SECONDS_PER_DAY,
+                                     image.predicted_value, size_mb))
+
+        if not candidates:
+            return None, Action.SKIP, None
+        
+        scores = self.ranker.predict(np.asarray(features, dtype=float))
+        image, rep, transmission_seconds = candidates[int(np.argmax(scores))]
+        end_time = state.current_time + transmission_seconds / SECONDS_PER_DAY
+        
+        return image, Action(int(rep) + 1), end_time
+
+
 class FIFOPolicy(Policy):
     """Keep new images at full resolution and prioritize the oldest captures."""
 
@@ -102,7 +157,7 @@ class FIFOPolicy(Policy):
             return StoragePlan(Action.DELETE, [])
 
         return StoragePlan(Action.FULL, onboard_actions)
-
+        
     def on_contact_available(self, 
                              contact_end_time: float, 
                              state: MissionState, 
@@ -111,9 +166,6 @@ class FIFOPolicy(Policy):
         remaining_seconds = (
             contact_end_time - state.current_time
         ) * SECONDS_PER_DAY
-
-        if remaining_seconds <= 0 or state.config.bandwidth <= 0:
-            return None, Action.SKIP, None
 
         for image in sorted(
             (image for image in state.onboard_images 

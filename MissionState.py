@@ -22,7 +22,7 @@ class MissionState:
 
     config: SimulationConfig
     current_time: float = 0.0
-    #consider implementing a dictionary instead of list as many ops will be O(n) 
+    #consider implementing a dictionary instead of list as some policies require searching for image
     onboard_images: list[SatelliteImage] = field(default_factory=list)
     remaining_downlink_mb: float = 0.0
     # in case for investigating action decisions
