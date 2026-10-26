@@ -1,5 +1,6 @@
 import xgboost as xgb
 import numpy as np
+import heapq
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import IntEnum
@@ -8,6 +9,7 @@ from typing import ClassVar
 from MissionState import MissionState
 from SatelliteImage import ImageRepresentation, ImageStatus, SatelliteImage
 from SimulationConfig import SimulationConfig
+from ScoringConfig import ScoringConfig
 
 
 SECONDS_PER_DAY = 86400
@@ -78,7 +80,7 @@ class XGBPolicy(Policy):
 
     def __init__(self):
         self.ranker = xgb.XGBRanker()
-        self.ranker.load_model("XGBRanker.json")
+        self.ranker.load_model("./data/XGBRanker.json")
 
     def on_image_capture(self, image: SatelliteImage, state: MissionState) -> Action:
         """Prefer to store every newly captured image at full resolution."""
@@ -122,6 +124,110 @@ class XGBPolicy(Policy):
         end_time = state.current_time + transmission_seconds / SECONDS_PER_DAY
         
         return image, Action(int(rep) + 1), end_time
+
+
+class GreedyPolicy(Policy):
+    "Implements a greedy algorithm to optimize transmissions, storage pressure and capture"
+    
+    name: ClassVar[str] = "greedy"
+
+    def __init__(self, scoring: ScoringConfig):
+        self.scoring = scoring
+
+    def on_image_capture(self, image: SatelliteImage, state: MissionState) -> Action:
+        "Store full image as its the 'best' decision available"
+        return Action.FULL
+
+    def on_storage_pressure(self, image: SatelliteImage, state: MissionState) -> StoragePlan:
+        """Free space by choosing the cheapest next reduction per MB."""
+        candidates = [image] + [
+            stored for stored in state.onboard_images
+            if stored.status == ImageStatus.STORED
+        ]
+        reps = [ImageRepresentation.FULL] + [
+            stored.representation for stored in candidates[1:]
+        ]
+        initial_reps = reps.copy()
+        projected_used = state.used_storage_mb + image.original_size
+        multipliers = self.scoring.representation_multipliers
+
+        heap = []
+
+        def add_next_reduction(i):
+            rep = reps[i]
+            if rep is None:
+                return
+            candidate = candidates[i]
+            for lower in range(int(rep) - 1, -2, -1):
+                next_rep = ImageRepresentation(lower) if lower >= 0 else None
+                new_size = candidate.representation_sizes[next_rep] if next_rep is not None else 0.0
+                freed = candidate.representation_sizes[rep] - new_size
+                if freed > 0:
+                    old_value = candidate.predicted_value * multipliers[rep]
+                    new_value = candidate.predicted_value * multipliers[next_rep] if next_rep is not None else 0.0
+                    heapq.heappush(heap, ((old_value - new_value) / freed, i, next_rep, freed))
+                    return
+
+        for i in range(len(candidates)):
+            add_next_reduction(i)
+
+        while projected_used > state.config.storage_capacity_mb:
+            if not heap:
+                return StoragePlan(Action.DELETE, [])
+
+            _, chosen, next_rep, freed = heapq.heappop(heap)
+            reps[chosen] = next_rep
+            projected_used -= freed
+
+            if chosen == 0 and next_rep is None:
+                return StoragePlan(Action.DELETE, [])
+            add_next_reduction(chosen)
+
+        onboard_actions = [
+            (candidate, Action.DELETE if rep is None else Action(rep + 1))
+            for candidate, rep, initial in zip(candidates[1:], reps[1:], initial_reps[1:])
+            if rep != initial
+        ]
+        incoming_action = Action.DELETE if reps[0] is None else Action(reps[0] + 1)
+        return StoragePlan(incoming_action, onboard_actions)
+
+
+    def on_contact_available(self,
+                             contact_end_time: float,
+                             state: MissionState,
+                             config: SimulationConfig) -> tuple[SatelliteImage | None, Action, float | None]:
+        """Send the feasible image/representation with the most predicted value per MB."""
+    
+        remaining_seconds = (contact_end_time - state.current_time) * SECONDS_PER_DAY
+
+        best = None
+        best_key = None
+
+        for image in state.onboard_images:
+            if image.status != ImageStatus.STORED:
+                continue
+
+            for rep in ImageRepresentation:
+                if rep > image.representation:
+                    continue
+
+                size_mb = image.representation_sizes[rep]
+                transmission_seconds = size_mb * 8 / config.bandwidth
+                if transmission_seconds > remaining_seconds:
+                    continue
+
+                expected_value = image.predicted_value * self.scoring.representation_multipliers[rep]
+                key = (expected_value / size_mb, expected_value)
+                if best_key is None or key > best_key:
+                    best_key = key
+                    best = (image, rep, transmission_seconds)
+
+        if best is None:
+            return None, Action.SKIP, None
+
+        image, rep, transmission_seconds = best
+        transmission_end_time = state.current_time + transmission_seconds / SECONDS_PER_DAY
+        return image, Action(int(rep) + 1), transmission_end_time
 
 
 class FIFOPolicy(Policy):
@@ -180,3 +286,4 @@ class FIFOPolicy(Policy):
                 return (image, Action.FULL, transmission_end_time)
 
         return None, Action.SKIP, None
+
