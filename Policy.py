@@ -74,21 +74,22 @@ class Policy(ABC):
 
 
 class XGBPolicy(Policy):
-    "Uses trained XGB ranker to select images to transmit while using FIFO policy on storage pressure"
+    """Uses trained XGB ranker to select images to transmit while using FIFO policy on storage pressure"""
 
     name: ClassVar[str] = "xgb"
 
     def __init__(self):
         self.ranker = xgb.XGBRanker()
         self.ranker.load_model("./data/XGBRanker.json")
+        self.fifo_policy = FIFOPolicy()
 
     def on_image_capture(self, image: SatelliteImage, state: MissionState) -> Action:
         """Prefer to store every newly captured image at full resolution."""
-        return FIFOPolicy().on_image_capture(image, state)
+        return self.fifo_policy.on_image_capture(image, state)
 
     def on_storage_pressure(self, image: SatelliteImage, state: MissionState) -> StoragePlan:
         """Plan deletion of the oldest images until the incoming image can fit."""
-        return FIFOPolicy().on_storage_pressure(image, state)
+        return self.fifo_policy.on_storage_pressure(image, state)
 
     def on_contact_available(self,
                              contact_end_time: float,
@@ -127,7 +128,7 @@ class XGBPolicy(Policy):
 
 
 class GreedyPolicy(Policy):
-    "Implements a greedy algorithm to optimize transmissions, storage pressure and capture"
+    """Implements a greedy algorithm optimizing predicted value per MB"""
     
     name: ClassVar[str] = "greedy"
 
@@ -135,7 +136,7 @@ class GreedyPolicy(Policy):
         self.scoring = scoring
 
     def on_image_capture(self, image: SatelliteImage, state: MissionState) -> Action:
-        "Store full image as its the 'best' decision available"
+        """Store full image as its the 'best' decision available"""
         return Action.FULL
 
     def on_storage_pressure(self, image: SatelliteImage, state: MissionState) -> StoragePlan:
@@ -228,6 +229,60 @@ class GreedyPolicy(Policy):
         image, rep, transmission_seconds = best
         transmission_end_time = state.current_time + transmission_seconds / SECONDS_PER_DAY
         return image, Action(int(rep) + 1), transmission_end_time
+
+
+class GreedyPolicyV2():
+    """Prioritize the highest predicted scientific value per transmission."""
+
+    name: ClassVar[str] = "greedy_v2"
+
+    def __init__(self, scoring: ScoringConfig):
+        self.scoring = scoring
+        self.greedy = GreedyPolicy(scoring)
+
+    def on_image_capture(self, image: SatelliteImage, state: MissionState) -> Action:
+        """Store full image as its the 'best' decision available"""
+        return Action.FULL
+
+    def on_storage_pressure(self, image: SatelliteImage, state: MissionState) -> StoragePlan:
+        """Uses original greedy on_storage_pressure policy"""
+        return self.greedy.on_storage_pressure(image, state)
+        
+    def on_contact_available(
+        self,
+        contact_end_time: float,
+        state: MissionState,
+        config: SimulationConfig,
+    ) -> tuple[SatelliteImage | None, Action, float | None]:
+        """"Sends the image and form with the most scientific value possible"""
+        
+        remaining_seconds = (contact_end_time - state.current_time) * SECONDS_PER_DAY
+        best = None
+        best_value = float("-inf")
+
+        for image in state.onboard_images:
+            if image.status != ImageStatus.STORED:
+                continue
+
+            for rep in ImageRepresentation:
+                if rep > image.representation:
+                    continue
+
+                transmission_seconds = image.representation_sizes[rep] * 8 / config.bandwidth
+                if transmission_seconds > remaining_seconds:
+                    continue
+
+                value = image.predicted_value * self.scoring.representation_multipliers[rep]
+                if value > best_value:
+                    best_value = value
+                    best = (image, rep, transmission_seconds)
+
+        if best is None:
+            return None, Action.SKIP, None
+
+        image, rep, transmission_seconds = best
+        end_time = state.current_time + transmission_seconds / SECONDS_PER_DAY
+        return image, Action(int(rep) + 1), end_time
 
 
 class FIFOPolicy(Policy):
