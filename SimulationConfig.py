@@ -47,3 +47,7 @@ class SimulationConfig:
     def storage_capacity_mb(self) -> float:
         """Return onboard storage capacity in megabytes."""
         return self.storage_capacity * 1024.0
+
+
+#once an image is sent is full (meaning no sending compressed and then later possibly sending full)
+#no partial transmissions
