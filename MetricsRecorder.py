@@ -38,6 +38,7 @@ class MetricsRecorder:
         self.policy_name = policy_name
         self.random_seed = random_seed
         self.available_downlink_mb_per_contact = available_downlink_mb_per_contact
+        self._initial_capacity = initial_capacity
 
         self._final_image_records = np.empty(
             initial_capacity,
@@ -194,3 +195,15 @@ class MetricsRecorder:
         )
         expanded_records[:self._final_image_count] = self._final_image_records
         self._final_image_records = expanded_records
+
+    def reset(self) -> None:
+        """Reset run data while preserving the recorder's configuration."""
+        self._final_image_records = np.empty(
+            self._initial_capacity,
+            dtype=FINAL_IMAGE_RECORD_DTYPE,
+        )
+        self._final_image_count = 0
+        self._run_start_time = perf_counter()
+        self.runtime_seconds = 0.0
+        self.total_images_captured = 0
+        self.total_contacts = 0        
