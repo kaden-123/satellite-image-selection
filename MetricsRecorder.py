@@ -30,6 +30,8 @@ class MetricsRecorder:
         initial_capacity: int = 4096,
     ) -> None:
         """Initialize counters, compact record storage, and runtime timing."""
+
+        #consider adding option to init wit config object instead for convenience
         if available_downlink_mb_per_contact < 0:
             raise ValueError("available_downlink_mb_per_contact cannot be negative")
         if initial_capacity <= 0:
@@ -46,7 +48,6 @@ class MetricsRecorder:
         )
         self._final_image_count = 0
 
-        # Wall-clock runtime measures Python execution time, not mission time.
         self._run_start_time = perf_counter()
         self.runtime_seconds = 0.0
 

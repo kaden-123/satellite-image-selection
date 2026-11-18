@@ -46,7 +46,6 @@ def create_image(
     true_category = int(rng.choice(4, p=(0.10, 0.45, 0.30, 0.15)))
     true_value = scoring.category_value(true_category)
 
-    # Dirichlet output is a probability vector that usually favors the truth.
     concentration = np.ones(4)
     concentration[true_category] = 7.0
     predicted_probabilities = tuple(
@@ -87,7 +86,7 @@ def set_image_representation(image, action):
     }[action]
 
 def run_simulation(config: SimulationConfig, policy, scoring: ScoringConfig, recorder : MetricsRecorder):
-    """Run one policy and return its summary and final-image DataFrames."""
+    """Run one policy through the simulation"""
     rng = np.random.default_rng(config.rand_seed)
     state = MissionState(config)
 
