@@ -33,11 +33,11 @@ class Action(IntEnum):
 
 @dataclass(slots=True)
 class StoragePlan:
-    """Complete response to storage pressure caused by an incoming image.
+    """ Response to storage pressure caused by an incoming image.
 
-    ``incoming_action`` determines whether the incoming image is deleted or
+    incoming_action determines whether the incoming image is deleted or
     stored as a thumbnail, compressed copy, or full-resolution copy.
-    ``onboard_actions`` contains existing images to delete or reduce first.
+    onboard_actions contains existing images to delete or reduce first.
     """
 
     incoming_action: Action
@@ -45,10 +45,10 @@ class StoragePlan:
 
 
 class Policy(ABC):
-    """Interface implemented by every onboard selection policy.
+    """Abstract function for all policies.
 
     Policies inspect predictions and mission state and return decisions. They
-    must not directly add, remove, or modify images in ``MissionState``; the
+    must not directly add, remove, or modify images in MissionState; the
     simulation validates and applies every returned decision.
     """
 
@@ -241,7 +241,7 @@ class GreedyPolicyV2():
         self.greedy = GreedyPolicy(scoring)
 
     def on_image_capture(self, image: SatelliteImage, state: MissionState) -> Action:
-        """Store full image as its the 'best' decision available"""
+        """Store full image as its the best decision available"""
         return Action.FULL
 
     def on_storage_pressure(self, image: SatelliteImage, state: MissionState) -> StoragePlan:
@@ -334,11 +334,15 @@ class FIFOPolicy(Policy):
             key=lambda stored: (stored.capture_time, stored.image_id)
         ):
             
-            transmission_seconds = image.original_size * 8 / state.config.bandwidth
-
+            transmission_seconds = image.stored_size_mb * 8 / state.config.bandwidth
+            temp_image_rep = image.representation
+            while transmission_seconds > remaining_seconds and temp_image_rep > 0:
+                temp_image_rep -= 1
+                transmission_seconds = image.representation_sizes[temp_image_rep] * 8 / config.bandwidth
+                
             if transmission_seconds <= remaining_seconds:
                 transmission_end_time = (state.current_time + transmission_seconds / SECONDS_PER_DAY)
-                return (image, Action.FULL, transmission_end_time)
+                return (image, Action(temp_image_rep+1), transmission_end_time)
 
         return None, Action.SKIP, None
 
